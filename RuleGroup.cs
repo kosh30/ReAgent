@@ -20,6 +20,7 @@ public class RuleGroup
     public bool EnabledInTown;
     public bool EnabledInHideout;
     public bool EnabledInPeacefulAreas;
+    public bool IgnoreGracePeriod;
     public bool EnabledInMaps = true;
     public string Name;
 
@@ -32,6 +33,13 @@ public class RuleGroup
     {
         using (settings.PluginSettings.ColorEnableToggles ? ImGuiHelpers.UseStyleColor(ImGuiCol.Text, Color.Lime.ToImguiVec4()) : null)
             ImGui.Checkbox("Enable", ref Enabled);
+        if (settings.PluginSettings.KeepEnableTogglesOnASingleLine)
+        {
+            ImGui.SameLine();
+        }
+        
+        using (settings.PluginSettings.ColorEnableToggles ? ImGuiHelpers.UseStyleColor(ImGuiCol.Text, Color.Orange.ToImguiVec4()) : null)
+            ImGui.Checkbox("Ignore Grace Period", ref IgnoreGracePeriod);
         if (settings.PluginSettings.KeepEnableTogglesOnASingleLine)
         {
             ImGui.SameLine();

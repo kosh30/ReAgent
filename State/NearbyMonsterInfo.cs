@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
@@ -6,6 +6,7 @@ using System.Threading;
 using ExileCore;
 using ExileCore.PoEMemory.Components;
 using ExileCore.PoEMemory.MemoryObjects;
+using ExileCore.Shared.Cache;
 using ExileCore.Shared.Enums;
 using ExileCore.Shared.Helpers;
 
@@ -101,12 +102,20 @@ public class EntityInfo
 public class MonsterInfo : EntityInfo
 {
     private bool? _isInvincible;
+    private readonly FramesCache<BuffDictionary> _buffsCache;
 
     public MonsterInfo(GameController controller, Entity entity) : base(controller, entity)
     {
         Vitals = new VitalsInfo(entity.GetComponent<Life>());
         Actor = new ActorInfo(entity);
         Skills = new SkillDictionary(controller, entity, true);
+        
+        // Cache BuffDictionary for 1 frame using ExileCore's FramesCache
+        // This updates every frame automatically via Core.FramesCount
+        _buffsCache = new FramesCache<BuffDictionary>(() => 
+            new BuffDictionary(Entity.GetComponent<Buffs>()?.BuffsList ?? [], null),
+            1U  // Cache for 1 frame
+        );
     }
 
     [Api]
@@ -129,7 +138,10 @@ public class MonsterInfo : EntityInfo
     };
 
     [Api]
-    public BuffDictionary Buffs => new BuffDictionary(Entity.GetComponent<Buffs>()?.BuffsList ?? [], null);
+    public BuffDictionary Buffs => _buffsCache.Value;
+    
+    [Api]
+    public BuffDictionary BuffsOld => new BuffDictionary(Entity.GetComponent<Buffs>()?.BuffsList ?? [], null);
 
     [Api]
     public SkillDictionary Skills { get; }

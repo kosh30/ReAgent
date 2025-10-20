@@ -7,6 +7,7 @@ using System.Linq;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using ExileCore;
 using ExileCore.PoEMemory.Components;
 using ExileCore.Shared.Helpers;
@@ -316,9 +317,15 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
             return;
         }
 
-        _internalState.KeyToPress = null;
+        // Only clear key/click if not waiting for a delay
+        if (_internalState.MouseActionDelayMs == 0)
+        {
+            _internalState.KeyToPress = null;
+            _internalState.MouseClickToPerform = null;
+        }
         _internalState.KeysToHoldDown.Clear();
         _internalState.KeysToRelease.Clear();
+        _internalState.MouseMoveToPosition = null;
         _internalState.TextToDisplay.Clear();
         _internalState.GraphicToDisplay.Clear();
         _internalState.ProgressBarsToDisplay.Clear();
@@ -364,11 +371,38 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
 
         ApplyPendingSideEffects();
 
+        // Handle mouse movement FIRST (before key press/click)
+        if (_internalState.MouseMoveToPosition is { } movePosition)
+        {
+            _internalState.MouseMoveToPosition = null;
+            Input.SetCursorPos(movePosition);
+            _internalState.MouseMoveExecutedTime = DateTime.Now;
+        }
+
         if (_internalState.KeyToPress is { } key)
         {
-            _internalState.KeyToPress = null;
-            InputHelper.SendInputPress(key);
-            _sinceLastKeyPress.Restart();
+            // Check if this is part of a delayed mouse action
+            if (_internalState.MouseActionDelayMs > 0)
+            {
+                // Has delay - check if mouse moved and delay elapsed
+                if (_internalState.MouseMoveExecutedTime != null &&
+                    (DateTime.Now - _internalState.MouseMoveExecutedTime.Value).TotalMilliseconds >= _internalState.MouseActionDelayMs)
+                {
+                    _internalState.KeyToPress = null;
+                    _internalState.MouseActionDelayMs = 0;
+                    _internalState.MouseMoveExecutedTime = null;
+                    InputHelper.SendInputPress(key);
+                    _sinceLastKeyPress.Restart();
+                }
+                // else: wait for delay to elapse
+            }
+            else
+            {
+                // No delay - execute immediately
+                _internalState.KeyToPress = null;
+                InputHelper.SendInputPress(key);
+                _sinceLastKeyPress.Restart();
+            }
         }
 
         foreach (var heldKey in _internalState.KeysToHoldDown)
@@ -380,6 +414,56 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
         foreach (var heldKey in _internalState.KeysToRelease)
         {
             InputHelper.SendInputUp(heldKey);
+        }
+
+        // Handle mouse click with delay
+        if (_internalState.MouseClickToPerform is { } mouseClick)
+        {
+            if (_internalState.MouseActionDelayMs > 0)
+            {
+                // Has delay - check if mouse moved and delay elapsed
+                if (_internalState.MouseMoveExecutedTime != null &&
+                    (DateTime.Now - _internalState.MouseMoveExecutedTime.Value).TotalMilliseconds >= _internalState.MouseActionDelayMs)
+                {
+                    _internalState.MouseClickToPerform = null;
+                    _internalState.MouseActionDelayMs = 0;
+                    _internalState.MouseMoveExecutedTime = null;
+                    
+                    switch (mouseClick.Button)
+                    {
+                        case MouseButton.Left:
+                            Input.Click(MouseButtons.Left);
+                            break;
+                        case MouseButton.Right:
+                            Input.Click(MouseButtons.Right);
+                            break;
+                        case MouseButton.Middle:
+                            Input.Click(MouseButtons.Middle);
+                            break;
+                    }
+                    _sinceLastKeyPress.Restart();
+                }
+                // else: wait for delay to elapse
+            }
+            else
+            {
+                // No delay - execute immediately
+                _internalState.MouseClickToPerform = null;
+                
+                switch (mouseClick.Button)
+                {
+                    case MouseButton.Left:
+                        Input.Click(MouseButtons.Left);
+                        break;
+                    case MouseButton.Right:
+                        Input.Click(MouseButtons.Right);
+                        break;
+                    case MouseButton.Middle:
+                        Input.Click(MouseButtons.Middle);
+                        break;
+                }
+                _sinceLastKeyPress.Restart();
+            }
         }
 
         foreach (var (text, position, size, fraction, color, backgroundColor, textColor) in _internalState.ProgressBarsToDisplay)

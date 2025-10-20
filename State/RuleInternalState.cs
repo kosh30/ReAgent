@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Windows.Forms;
@@ -9,10 +9,26 @@ namespace ReAgent.State;
 
 public class RuleInternalState
 {
+    // Cache tracking
+    public uint LastAreaHash { get; set; }
+    public int LastPartyMembersInZone { get; set; } = -1;
+    public DateTime LastAreaEnterTime { get; set; }
+    public DateTime LastTransitionEndTime { get; set; }  // When grace period ended
+    public bool WasInLoadingScreen { get; set; }
+    public bool WasInGracePeriod { get; set; }
+    
+    // Cached data that persists across frames
+    public List<MonsterInfo> CachedAllPlayers { get; set; }
+    public List<EntityInfo> CachedPortals { get; set; }
+    public Dictionary<int, bool> CachedPortalDistances { get; set; } = new();
     public bool CanPressKey { get; set; }
     public HotkeyNodeValue? KeyToPress { get; set; }
     public List<HotkeyNodeValue> KeysToHoldDown { get; set; } = [];
     public List<HotkeyNodeValue> KeysToRelease { get; set; } = [];
+    public Vector2? MouseMoveToPosition { get; set; }
+    public (Vector2 Position, SideEffects.MouseButton Button)? MouseClickToPerform { get; set; }
+    public DateTime? MouseMoveExecutedTime { get; set; }
+    public int MouseActionDelayMs { get; set; }
     public List<(string GraphicFilePath, Vector2 Position, Vector2 Size, string TintColor)> GraphicToDisplay { get; } = new();
     public List<(string Text, Vector2 Position, string Color)> TextToDisplay { get; } = new();
     public List<(string Text, Vector2 Position, Vector2 Size, float Fraction, string Color, string BackgroundColor, string TextColor)> ProgressBarsToDisplay { get; } = new();

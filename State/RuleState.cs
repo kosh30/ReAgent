@@ -1,12 +1,14 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Numerics;
 using System.Threading;
 using System.Windows.Forms;
 using ExileCore;
 using ExileCore.PoEMemory.Components;
 using ExileCore.PoEMemory.MemoryObjects;
 using ExileCore.Shared.Enums;
+using ExileCore.Shared.Helpers;
 
 namespace ReAgent.State;
 
@@ -27,6 +29,7 @@ public class RuleState
     private readonly Lazy<string> _leaderName;
     private readonly Lazy<List<MonsterInfo>> _corpses;
     private readonly Lazy<List<EntityInfo>> _portals;
+    private readonly ReAgent _plugin;
 
     public RuleInternalState InternalState
     {
@@ -43,6 +46,7 @@ public class RuleState
 
     public RuleState(ReAgent plugin, RuleInternalState internalState)
     {
+        _plugin = plugin;
         _internalState = internalState;
         var controller = plugin.GameController;
         if (controller != null)
@@ -52,8 +56,46 @@ public class RuleState
             IsInPeacefulArea = plugin.GameController.Area.CurrentArea.IsPeaceful;
             IsInEscapeMenu = plugin.GameController.Game.IsEscapeState;
             AreaName = plugin.GameController.Area.CurrentArea.Name;
+            
+            // Transition and party tracking
+            var currentAreaHash = plugin.GameController.Area.CurrentArea.Hash;
+            var isLoadingScreen = plugin.GameController.Game.IsLoading;
+            
+            // Detect zone transitions
+            if (internalState.LastAreaHash != currentAreaHash && internalState.LastAreaHash != 0)
+            {
+                internalState.LastAreaEnterTime = DateTime.Now;
+                internalState.LastPartyMembersInZone = -1; // Force party recache
+                internalState.CachedAllPlayers = null; // Invalidate player cache
+                internalState.CachedPortals = null; // Invalidate portal cache
+                internalState.CachedPortalDistances.Clear(); // Clear distance cache
+            }
+            internalState.LastAreaHash = currentAreaHash;
+            
+            // Track loading screen state for transition detection
+            JustLeftLoadingScreen = internalState.WasInLoadingScreen && !isLoadingScreen;
+            internalState.WasInLoadingScreen = isLoadingScreen;
+            
+            // Party member tracking for caching
+            var partyInfo = controller.IngameState.IngameUi?.PartyElement?.Information;
+            PartyMembersInZone = partyInfo?.Count(p => !p.Value.IsInDifferentZone) ?? 0;
 
             var player = controller.Player;
+            
+            // Track grace period transitions (after player is defined)
+            var hasGracePeriod = false;
+            if (player.TryGetComponent<Buffs>(out var buffComp))
+            {
+                hasGracePeriod = buffComp.HasBuff("grace_period");
+            }
+            
+            // Detect grace period ending (transition complete)
+            if (internalState.WasInGracePeriod && !hasGracePeriod)
+            {
+                internalState.LastTransitionEndTime = DateTime.Now;
+            }
+            internalState.WasInGracePeriod = hasGracePeriod;
+            IsInGracePeriod = hasGracePeriod;
             if (player.TryGetComponent<Buffs>(out var playerBuffs))
             {
                 Ailments = plugin.CustomAilments
@@ -81,6 +123,7 @@ public class RuleState
 
             Flasks = new FlasksInfo(controller, InternalState);
             Player = new MonsterInfo(controller, player);
+            PlayerScreenPosition = controller.IngameState.Data.GetGridScreenPosition(player.GridPosNum)+controller.Window.GetWindowRectangle().Location.ToVector2Num();
             _nearbyMonsterInfo = new Lazy<NearbyMonsterInfo>(() => new NearbyMonsterInfo(plugin), LazyThreadSafetyMode.None);
             _miscellaneousObjects = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.MiscellaneousObjects].Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
             _noneEntities = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.None].Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
@@ -97,11 +140,29 @@ public class RuleState
                 .Where(x => x.IsDead)
                     .Select(x => new MonsterInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
             _effects = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.Effect].Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
-            _allPlayers = new Lazy<List<MonsterInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.Player]
-                    .Select(x => new MonsterInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
+            _allPlayers = new Lazy<List<MonsterInfo>>(() =>
+            {
+                // Smart caching: only rebuild if party composition changed
+                if (internalState.CachedAllPlayers == null || internalState.LastPartyMembersInZone != PartyMembersInZone||PartyMembersInZone !=internalState.CachedAllPlayers.Count)
+                {
+                    DebugWindow.LogMsg($"Rebuilding player cache: PartyMembersInZone={PartyMembersInZone}, CachedCount={internalState.CachedAllPlayers?.Count ?? 0}");
+                    internalState.LastPartyMembersInZone = PartyMembersInZone;
+                    internalState.CachedAllPlayers = controller.EntityListWrapper.ValidEntitiesByType[EntityType.Player]
+                        .Select(x => new MonsterInfo(controller, x)).ToList();
+                }
+                return internalState.CachedAllPlayers;
+            }, LazyThreadSafetyMode.None);
             _leaderName = new Lazy<string>(() => controller.IngameState.ServerData.PartyMembers.FirstOrDefault(p=>p.Type is PartyPlayerInfoType.Leader)?.PlayerInfo.CharacterName, LazyThreadSafetyMode.None);
-            _portals = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.TownPortal]
-                .Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
+            _portals = new Lazy<List<EntityInfo>>(() =>
+            {
+                // Cache portals across frames since they don't change often
+                if (internalState.CachedPortals == null)
+                {
+                    internalState.CachedPortals = controller.EntityListWrapper.ValidEntitiesByType[EntityType.TownPortal]
+                        .Select(x => new EntityInfo(controller, x)).ToList();
+                }
+                return internalState.CachedPortals;
+            }, LazyThreadSafetyMode.None);
         }
     }
 
@@ -140,6 +201,9 @@ public class RuleState
     public MonsterInfo Player { get; }
 
     [Api]
+    public Vector2 PlayerScreenPosition { get; }
+
+    [Api]
     public bool IsInHideout { get; }
 
     [Api]
@@ -153,6 +217,27 @@ public class RuleState
 
     [Api]
     public string AreaName { get; }
+    
+    [Api]
+    public int PartyMembersInZone { get; }
+    
+    [Api]
+    public bool JustLeftLoadingScreen { get; }
+    
+    [Api]
+    public bool IsInGracePeriod { get; }
+    
+    [Api]
+    public bool JustEnteredArea => (DateTime.Now - _internalState.LastAreaEnterTime).TotalSeconds < 1.0;
+    
+    [Api]
+    public double TimeSinceAreaEnter => (DateTime.Now - _internalState.LastAreaEnterTime).TotalSeconds;
+    
+    [Api]
+    public double TimeSinceLastTransition => (DateTime.Now - _internalState.LastTransitionEndTime).TotalSeconds;
+    
+    [Api]
+    public bool JustFinishedTransition => TimeSinceLastTransition < 1.0;
 
     [Api]
     public int MonsterCount(int range, MonsterRarity rarity) => _nearbyMonsterInfo.Value.GetMonsterCount(range, rarity);
@@ -206,7 +291,96 @@ public class RuleState
     public MonsterInfo PartyLeader => _allPlayers.Value.FirstOrDefault(p => p.PlayerName.Equals(_leaderName.Value));
     
     [Api]
-    public bool AnyPortal(int distance) => _portals.Value.Any(p => p.Distance < distance);
+    public bool IsInParty => PartyMembersInZone > 0;
+    
+    [Api]
+    public IEnumerable<MonsterInfo> PartyMembers => _allPlayers.Value.Where(p => p.Distance > 0);
+    
+    [Api]
+    public IEnumerable<MonsterInfo> NearbyPartyMembers(int distance) => PartyMembers.Where(p => p.Distance < distance);
+    
+    [Api]
+    public bool AnyPartyMemberMissingBuff(string buffName, int withinDistance) => 
+        PartyMembers.Any(p => p.Distance < withinDistance && !p.Buffs.Has(buffName));
+    
+    [Api]
+    public bool AnyPartyMemberMissingBuff(string buffName) => AnyPartyMemberMissingBuff(buffName, 50);
+    
+    [Api]
+    public bool AnyPartyMemberHasBuff(string buffName, int withinDistance) => 
+        PartyMembers.Any(p => p.Distance < withinDistance && p.Buffs.Has(buffName));
+    
+    [Api]
+    public bool AnyPartyMemberHasBuff(string buffName) => AnyPartyMemberHasBuff(buffName, 50);
+
+    [Api]
+    public MonsterInfo PartyMemberByName(string name, int maxDistance) =>
+        AllPlayers.FirstOrDefault(p => p.PlayerName.Equals(name, StringComparison.OrdinalIgnoreCase) && p.Distance < maxDistance);
+    
+    [Api]
+    public MonsterInfo PartyMemberByName(string name) => PartyMemberByName(name, int.MaxValue);
+    
+    [Api]
+    public bool PartyMemberHereAndNoGracePeriod(string name, int maxDistance)
+    {
+        var player = PartyMemberByName(name, maxDistance);
+        if (player == null) return false;  // Player not found = don't proc
+        return !player.Buffs.Has("grace_period");
+    }
+    
+    [Api]
+    public bool PartyMemberHereAndNoGracePeriod(string name) => PartyMemberHereAndNoGracePeriod(name, 100);
+    
+    private static string GetClassMetadata(string className)
+    {
+        return className.ToLowerInvariant() switch
+        {
+            "ranger" or "dex" => "Metadata/Characters/Dex/Dex",
+            "witch" or "int" => "Metadata/Characters/Int/Int",
+            "marauder" or "str" => "Metadata/Characters/Str/Str",
+            "duelist" or "strdex" => "Metadata/Characters/StrDex/StrDex",
+            "templar" or "strint" => "Metadata/Characters/StrInt/StrInt",
+            "shadow" or "dexint" => "Metadata/Characters/DexInt/DexInt",
+            "scion" or "strdexint" => "Metadata/Characters/StrDexInt/StrDexInt",
+            _ => null
+        };
+    }
+    
+    [Api]
+    public MonsterInfo PartyMemberByClass(string className, int maxDistance)
+    {
+        var metadata = GetClassMetadata(className);
+        if (metadata == null) return null;
+        return AllPlayers.FirstOrDefault(p => p.Metadata.Equals(metadata, StringComparison.OrdinalIgnoreCase));
+    }
+    
+    [Api]
+    public MonsterInfo PartyMemberByClass(string className) => PartyMemberByClass(className, int.MaxValue);
+    
+    [Api]
+    public bool PartyClassHereAndNoGracePeriod(string className, int maxDistance)
+    {
+        var player = PartyMemberByClass(className, maxDistance);
+        if (player == null) return false;  // Player not found = don't proc
+        return !player.Buffs.Has("grace_period");
+    }
+    
+    [Api]
+    public bool PartyClassHereAndNoGracePeriod(string className) => PartyClassHereAndNoGracePeriod(className, int.MaxValue);
+    
+    [Api]
+    public bool AnyPortal(int distance)
+    {
+        // Cache portal distance queries across frames since they're checked very frequently
+        if (_internalState.CachedPortalDistances.TryGetValue(distance, out var cached))
+        {
+            return cached;
+        }
+        
+        var result = _portals.Value.Any(p => p.Distance < distance);
+        _internalState.CachedPortalDistances[distance] = result;
+        return result;
+    }
 
     [Api]
     public IEnumerable<EntityInfo> Effects => _effects.Value;
@@ -248,4 +422,102 @@ public class RuleState
 
     [Api]
     public bool IsAnyLargePanelOpen => _internalState.LargePanelVisible;
+    
+    /// <summary>
+    /// Determines if the current player should cast a vaal skill based on alphabetical priority with class-based sorting.
+    /// Priority order:
+    /// 1. Scion (Metadata/Characters/StrDexInt/StrDexInt) - highest priority
+    /// 2. Duelist (Metadata/Characters/StrDex/StrDex) - second priority  
+    /// 3. All other classes - sorted alphabetically by player name
+    /// </summary>
+    /// <param name="skillName">Name of the vaal skill (e.g., "VaalDiscipline")</param>
+    /// <param name="buffName">Name of the buff to check (e.g., "vaal_aura_energy_shield")</param>
+    /// <param name="radius">Maximum distance to consider party members (default 60)</param>
+    /// <param name="castBeforeExpiry">How many seconds before buff expires to trigger (default 0.5)</param>
+    /// <returns>True if this player should cast the vaal skill</returns>
+    [Api]
+    public bool ShouldCastVaalSkillByPriority(string skillName, string buffName, float radius = 60f, float castBeforeExpiry = 0.5f)
+    {
+        // Check if our skill exists and is ready
+        var ourSkill = Skills[skillName];
+        if (!ourSkill.Exists || !ourSkill.CanBeUsed)
+        {
+            return false;
+        }
+        
+        // Get all party members (including self) within radius
+        var playersInRange = AllPlayers
+            .Where(p => p.Distance < radius)
+            .ToList();
+        
+        if (playersInRange.Count == 0)
+        {
+            return false;
+        }
+        
+        // Check if buff is active and its remaining time
+        var buffActive = false;
+        var buffTimeRemaining = 0.0;
+        
+        // Check if any player in range has the buff
+        foreach (var player in playersInRange)
+        {
+            if (player.Buffs.Has(buffName))
+            {
+                buffActive = true;
+                buffTimeRemaining = player.Buffs[buffName].TimeLeft;
+                break;
+            }
+        }
+        
+        // If buff is not active, first player by priority should cast
+        // If buff is active but expiring soon, next player should prepare
+        if (buffActive && buffTimeRemaining > castBeforeExpiry)
+        {
+            return false;
+        }
+        
+        // Filter to only players who have the skill ready
+        var playersWithSkillReady = playersInRange
+            .Where(p => 
+            {
+                var skill = p.Skills[skillName];
+                return skill.Exists && skill.CanBeUsed;
+            })
+            .ToList();
+        
+        if (playersWithSkillReady.Count == 0)
+        {
+            return false;
+        }
+        
+        // If we're the only one with skill ready, cast regardless of priority
+        if (playersWithSkillReady.Count == 1 && playersWithSkillReady[0].PlayerName == Player.PlayerName)
+        {
+            return true;
+        }
+        
+        // Sort players by priority:
+        // 1. Scion (StrDexInt) - priority 0
+        // 2. Duelist (StrDex) - priority 1  
+        // 3. Everyone else - priority 2, then alphabetically by name
+        var sortedPlayers = playersWithSkillReady
+            .OrderBy(p =>
+            {
+                var metadata = p.Metadata;
+                if (metadata != null)
+                {
+                    if (metadata.Contains("Metadata/Characters/StrDexInt/StrDexInt"))
+                        return (0, p.PlayerName); // Scion first
+                    if (metadata.Contains("Metadata/Characters/StrDex/StrDex"))
+                        return (1, p.PlayerName); // Duelist second
+                }
+                return (2, p.PlayerName); // Everyone else, sorted by name
+            })
+            .ToList();
+        
+        // Check if we're the first in the sorted list
+        var firstPlayer = sortedPlayers.FirstOrDefault();
+        return firstPlayer != null && firstPlayer.PlayerName == Player.PlayerName;
+    }
 }

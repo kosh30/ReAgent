@@ -37,7 +37,7 @@ My Discord: pepeg11
 - `SinceLastActivation(double minTime, double maxTime)` - Improved timing with randomization
 - Portal tracking improvements
 - Exerted attacks support
-- UI crash fixes (credit: rushtothesun)
+- UI crash fixes (credit: rushtothesun and me)
 
 ### Testing Status
 

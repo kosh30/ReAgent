@@ -365,6 +365,16 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
 
         foreach (var group in profile.Groups)
         {
+            if (!group.IgnoreGracePeriod)
+            {
+                if (GameController.Player.TryGetComponent<Buffs>(out var buffComp))
+                {
+                    if (buffComp.HasBuff("grace_period"))
+                    {
+                        continue;
+                    }
+                }
+            }
             var newSideEffects = group.Evaluate(_state).ToList();
             foreach (var sideEffect in newSideEffects)
             {
@@ -515,12 +525,12 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
 
         if (GameController.Player.TryGetComponent<Buffs>(out var buffComp))
         {
-            if (!Settings.PluginSettings.IgnoreGracePeriod &&
+            /*if (!Settings.PluginSettings.IgnoreGracePeriod &&
                 buffComp.HasBuff("grace_period"))
             {
                 state = "Grace period is active";
                 return false;
-            }
+            }*/
         }
         else
         {

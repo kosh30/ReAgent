@@ -374,6 +374,22 @@ public class RuleState
     public bool SinceLastActivation(double minTime) =>
         (_internalState.CurrentGroupState.ConditionActivations.GetValueOrDefault(_internalState.CurrentGroupState.CurrentRule)?.Elapsed.TotalSeconds ??
          double.PositiveInfinity) > minTime;
+    
+    [Api]
+    public bool SinceLastActivation(double minTime, double maxTime)
+    {
+        var groupState = _internalState.CurrentGroupState;
+        var rule = groupState.CurrentRule;
+        var activation = groupState.ConditionActivations.GetValueOrDefault(rule);
+        if (activation is null)
+            return false;
+        var elapsedSeconds = activation.Elapsed.TotalSeconds;
+        var seed = rule.GetHashCode() * 123 ^ activation.GetHashCode();
+        var random = new Random(seed);
+        var t = (random.NextDouble() + random.NextDouble()) * 0.5;
+        var humanizedThreshold = minTime + t * (maxTime - minTime);
+        return elapsedSeconds > humanizedThreshold;
+    }
 
     [Api]
     public bool IsFlagSet(string name) => _internalState.CurrentGroupState.Flags.GetValueOrDefault(name);

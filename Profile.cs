@@ -105,7 +105,27 @@ public class Profile
 
     private unsafe void DrawSettingsVertical(RuleState state, ReAgentSettings settings)
     {
-        if (ImGui.BeginChild("left", new Vector2(settings.PluginSettings.VerticalTabContainerWidth.Value, 0)))
+        bool skipDrawGroups = false;
+        try
+        {
+            var windowPos = ImGui.GetWindowPos();
+            var displaySize = ImGui.GetIO().DisplaySize;
+
+            //skip if groups tabs are significantly off-screen horizontally
+            if (windowPos.X < -60 || // Left edge off screen
+                windowPos.X > displaySize.X - 10 // Right edge off screen  
+               )
+            {
+                skipDrawGroups = true;
+            }
+        }
+        catch
+        {
+            skipDrawGroups = true;
+        }
+
+        if (!skipDrawGroups &&
+            ImGui.BeginChild("left", new Vector2(settings.PluginSettings.VerticalTabContainerWidth.Value, 0)))
         {
             bool popupRequested = false;
             for (var i = 0; i < Groups.Count; i++)

@@ -36,7 +36,6 @@ My Discord: pepeg11
 - `PlayerScreenPosition` - Get player position on screen
 - `SinceLastActivation(double minTime, double maxTime)` - Improved timing with randomization
 - Portal tracking improvements
-- Mouse side effects handling
 - Exerted attacks support
 - UI crash fixes (credit: rushtothesun)
 

@@ -120,6 +120,11 @@ public class RuleState
                 AnimationId = actorComponent.AnimationController?.CurrentAnimationId ?? 0;
                 AnimationStage = actorComponent.AnimationController?.CurrentAnimationStage ?? 0;
             }
+            
+            if (player.TryGetComponent<Pathfinding>(out var pathfindingComponent))
+            {
+                StayTime = pathfindingComponent.StayTime;
+            }
 
             _mapStats = new Lazy<StatDictionary>(() => new StatDictionary(controller.IngameState.Data.MapStats), LazyThreadSafetyMode.None);
 
@@ -216,6 +221,9 @@ public class RuleState
     
     [Api]
     public bool IsInGracePeriod { get; }
+    
+    [Api]
+    public float StayTime { get; }
     
     [Api]
     public bool JustEnteredArea => (DateTime.Now - _internalState.LastAreaEnterTime).TotalSeconds < 1.0;
@@ -382,7 +390,7 @@ public class RuleState
         var rule = groupState.CurrentRule;
         var activation = groupState.ConditionActivations.GetValueOrDefault(rule);
         if (activation is null)
-            return false;
+            return true;
         var elapsedSeconds = activation.Elapsed.TotalSeconds;
         var seed = rule.GetHashCode() * 123 ^ activation.GetHashCode();
         var random = new Random(seed);

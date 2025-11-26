@@ -21,6 +21,7 @@ public class RuleState
     private readonly RuleInternalState _internalState;
     private readonly Lazy<List<EntityInfo>> _ingameiconObjects;
     private readonly Lazy<List<EntityInfo>> _miniMonoliths;
+    private readonly Lazy<List<EntityInfo>> _terrainEntities;
 
     private readonly Lazy<List<EntityInfo>> _effects;
     private readonly Lazy<List<MonsterInfo>> _allMonsters;
@@ -29,7 +30,8 @@ public class RuleState
     private readonly Lazy<string> _leaderName;
     private readonly Lazy<List<MonsterInfo>> _corpses;
     private readonly Lazy<List<EntityInfo>> _portals;
-    private readonly ReAgent _plugin;
+    private readonly Lazy<StatDictionary> _mapStats;
+    private readonly GameController _controller;
 
     public RuleInternalState InternalState
     {
@@ -46,9 +48,9 @@ public class RuleState
 
     public RuleState(ReAgent plugin, RuleInternalState internalState)
     {
-        _plugin = plugin;
         _internalState = internalState;
         var controller = plugin.GameController;
+        _controller = controller;
         if (controller != null)
         {
             IsInHideout = plugin.GameController.Area.CurrentArea.IsHideout;
@@ -119,6 +121,8 @@ public class RuleState
                 AnimationStage = actorComponent.AnimationController?.CurrentAnimationStage ?? 0;
             }
 
+            _mapStats = new Lazy<StatDictionary>(() => new StatDictionary(controller.IngameState.Data.MapStats), LazyThreadSafetyMode.None);
+
             Buffs = new BuffDictionary(playerBuffs?.BuffsList ?? [], Skills);
 
             Flasks = new FlasksInfo(controller, InternalState);
@@ -129,6 +133,7 @@ public class RuleState
             _noneEntities = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.None].Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
             _ingameiconObjects = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.IngameIcon].Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
             _miniMonoliths = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.MiniMonolith].Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
+            _terrainEntities = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.Terrain].Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
             _allMonsters = new Lazy<List<MonsterInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.Monster]
                 .Where(e => NearbyMonsterInfo.IsValidMonster(plugin, e, false, false))
                     .Select(x => new MonsterInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
@@ -140,32 +145,17 @@ public class RuleState
                 .Where(x => x.IsDead)
                     .Select(x => new MonsterInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
             _effects = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.Effect].Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
-            _allPlayers = new Lazy<List<MonsterInfo>>(() =>
-            {
-                // Smart caching: only rebuild if party composition changed
-                if (internalState.CachedAllPlayers == null || internalState.LastPartyMembersInZone != PartyMembersInZone||PartyMembersInZone !=internalState.CachedAllPlayers.Count)
-                {
-                    DebugWindow.LogMsg($"Rebuilding player cache: PartyMembersInZone={PartyMembersInZone}, CachedCount={internalState.CachedAllPlayers?.Count ?? 0}");
-                    internalState.LastPartyMembersInZone = PartyMembersInZone;
-                    internalState.CachedAllPlayers = controller.EntityListWrapper.ValidEntitiesByType[EntityType.Player]
-                        .Select(x => new MonsterInfo(controller, x)).ToList();
-                }
-                return internalState.CachedAllPlayers;
-            }, LazyThreadSafetyMode.None);
+            _allPlayers = new Lazy<List<MonsterInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.Player]
+                    .Select(x => new MonsterInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
             _leaderName = new Lazy<string>(() => controller.IngameState.ServerData.PartyMembers.FirstOrDefault(p=>p.Type is PartyPlayerInfoType.Leader)?.PlayerInfo.CharacterName, LazyThreadSafetyMode.None);
-            _portals = new Lazy<List<EntityInfo>>(() =>
-            {
-                // Cache portals across frames since they don't change often
-                if (internalState.CachedPortals == null)
-                {
-                    internalState.CachedPortals = controller.EntityListWrapper.ValidEntitiesByType[EntityType.TownPortal]
-                        .Select(x => new EntityInfo(controller, x)).ToList();
-                }
-                return internalState.CachedPortals;
-            }, LazyThreadSafetyMode.None);
+            _portals = new Lazy<List<EntityInfo>>(() => controller.EntityListWrapper.ValidEntitiesByType[EntityType.TownPortal]
+                .Select(x => new EntityInfo(controller, x)).ToList(), LazyThreadSafetyMode.None);
         }
     }
 
+
+    [Api]
+    public StatDictionary MapStats => _mapStats.Value;
 
     [Api]
     public bool IsMoving { get; }
@@ -273,6 +263,9 @@ public class RuleState
     public IEnumerable<EntityInfo> MiniMonoliths => _miniMonoliths.Value;
 
     [Api]
+    public IEnumerable<EntityInfo> TerrainEntities => _terrainEntities.Value;
+
+    [Api]
     public IEnumerable<MonsterInfo> AllMonsters => _allMonsters.Value;
 
     [Api]
@@ -289,6 +282,9 @@ public class RuleState
     
     [Api]
     public MonsterInfo PartyLeader => _allPlayers.Value.FirstOrDefault(p => p.PlayerName.Equals(_leaderName.Value));
+    
+    [Api]
+    public bool PortalExists(int distance) => _portals.Value.Any(p => p.Distance < distance);
     
     [Api]
     public bool IsInParty => PartyMembersInZone > 0;
@@ -367,20 +363,6 @@ public class RuleState
     
     [Api]
     public bool PartyClassHereAndNoGracePeriod(string className) => PartyClassHereAndNoGracePeriod(className, int.MaxValue);
-    
-    [Api]
-    public bool AnyPortal(int distance)
-    {
-        // Cache portal distance queries across frames since they're checked very frequently
-        if (_internalState.CachedPortalDistances.TryGetValue(distance, out var cached))
-        {
-            return cached;
-        }
-        
-        var result = _portals.Value.Any(p => p.Distance < distance);
-        _internalState.CachedPortalDistances[distance] = result;
-        return result;
-    }
 
     [Api]
     public IEnumerable<EntityInfo> Effects => _effects.Value;
@@ -406,7 +388,7 @@ public class RuleState
     public bool IsTimerRunning(string name) => _internalState.CurrentGroupState.Timers.GetValueOrDefault(name)?.IsRunning ?? false;
     
     [Api]
-    public float Random(int min, int max) => System.Random.Shared.Next(min,max) + min;
+    public float Random(int min, int max) => System.Random.Shared.Next(min, max);
 
     [Api]
     public bool IsChatOpen => _internalState.ChatTitlePanelVisible;
@@ -520,4 +502,7 @@ public class RuleState
         var firstPlayer = sortedPlayers.FirstOrDefault();
         return firstPlayer != null && firstPlayer.PlayerName == Player.PlayerName;
     }
+
+    [Api]
+    public Vector2 MousePosition => _controller.IngameState.ServerData.WorldMousePositionNum.WorldToGrid();
 }

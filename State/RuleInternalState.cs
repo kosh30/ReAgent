@@ -30,6 +30,7 @@ public class RuleInternalState
     public DateTime? MouseMoveExecutedTime { get; set; }
     public int MouseActionDelayMs { get; set; }
     public List<(string GraphicFilePath, Vector2 Position, Vector2 Size, string TintColor)> GraphicToDisplay { get; } = new();
+    public List<(string MethodName, Action<Delegate> Invoker)> PluginBridgeMethodsToCall { get; } = new();
     public List<(string Text, Vector2 Position, string Color)> TextToDisplay { get; } = new();
     public List<(string Text, Vector2 Position, Vector2 Size, float Fraction, string Color, string BackgroundColor, string TextColor)> ProgressBarsToDisplay { get; } = new();
     public bool AccessForbidden { get; set; }

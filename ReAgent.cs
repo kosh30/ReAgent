@@ -336,17 +336,12 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
             return;
         }
 
-        // Only clear key/click if not waiting for a delay
-        if (_internalState.MouseActionDelayMs == 0)
-        {
-            _internalState.KeyToPress = null;
-            _internalState.MouseClickToPerform = null;
-        }
+        _internalState.KeyToPress = null;
         _internalState.KeysToHoldDown.Clear();
         _internalState.KeysToRelease.Clear();
-        _internalState.MouseMoveToPosition = null;
         _internalState.TextToDisplay.Clear();
         _internalState.GraphicToDisplay.Clear();
+        _internalState.PluginBridgeMethodsToCall.Clear();
         _internalState.ProgressBarsToDisplay.Clear();
         _internalState.ChatTitlePanelVisible = GameController.IngameState.IngameUi.ChatTitlePanel.IsVisible;
         _internalState.CanPressKey = _sinceLastKeyPress.ElapsedMilliseconds >= Settings.GlobalKeyPressCooldown && !_internalState.ChatTitlePanelVisible;
@@ -370,16 +365,6 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
 
         foreach (var group in profile.Groups)
         {
-            if (!group.IgnoreGracePeriod)
-            {
-                if (GameController.Player.TryGetComponent<Buffs>(out var buffComp))
-                {
-                    if (buffComp.HasBuff("grace_period"))
-                    {
-                        continue;
-                    }
-                }
-            }
             var newSideEffects = group.Evaluate(_state).ToList();
             foreach (var sideEffect in newSideEffects)
             {
@@ -390,98 +375,54 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
 
         ApplyPendingSideEffects();
 
-        // Handle mouse movement FIRST (before key press/click)
-        if (_internalState.MouseMoveToPosition is { } movePosition)
+        foreach (var (methodName, invoker) in _internalState.PluginBridgeMethodsToCall)
         {
-            _internalState.MouseMoveToPosition = null;
-            Input.SetCursorPos(movePosition);
-            _internalState.MouseMoveExecutedTime = DateTime.Now;
+            try
+            {
+                if (GameController.PluginBridge.GetMethod<Delegate>(methodName) is { } method)
+                {
+                    invoker(method);
+                }
+                else
+                {
+                    LogError($"Plugin bridge method {methodName} was not found");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogError($"Plugin bridge {methodName} call error: {ex}");
+            }
         }
 
         if (_internalState.KeyToPress is { } key)
         {
-            // Check if this is part of a delayed mouse action
-            if (_internalState.MouseActionDelayMs > 0)
-            {
-                // Has delay - check if mouse moved and delay elapsed
-                if (_internalState.MouseMoveExecutedTime != null &&
-                    (DateTime.Now - _internalState.MouseMoveExecutedTime.Value).TotalMilliseconds >= _internalState.MouseActionDelayMs)
-                {
-                    _internalState.KeyToPress = null;
-                    _internalState.MouseActionDelayMs = 0;
-                    _internalState.MouseMoveExecutedTime = null;
-                    InputHelper.SendInputPress(key);
-                    _sinceLastKeyPress.Restart();
-                }
-                // else: wait for delay to elapse
-            }
-            else
-            {
-                // No delay - execute immediately
-                _internalState.KeyToPress = null;
-                InputHelper.SendInputPress(key);
-                _sinceLastKeyPress.Restart();
-            }
+            _internalState.KeyToPress = null;
+            InputHelper.SendInputPress(key);
+            _sinceLastKeyPress.Restart();
         }
 
         foreach (var heldKey in _internalState.KeysToHoldDown)
         {
-            InputHelper.SendInputDown(heldKey);
+            if (heldKey?.Key == Keys.LButton)
+            {
+                Input.LeftDown();
+            }
+            else
+            {
+                InputHelper.SendInputDown(heldKey);
+            }
         }
 
 
         foreach (var heldKey in _internalState.KeysToRelease)
         {
-            InputHelper.SendInputUp(heldKey);
-        }
-
-        // Handle mouse click with delay
-        if (_internalState.MouseClickToPerform is { } mouseClick)
-        {
-            if (_internalState.MouseActionDelayMs > 0)
+            if (heldKey?.Key == Keys.LButton)
             {
-                // Has delay - check if mouse moved and delay elapsed
-                if (_internalState.MouseMoveExecutedTime != null &&
-                    (DateTime.Now - _internalState.MouseMoveExecutedTime.Value).TotalMilliseconds >= _internalState.MouseActionDelayMs)
-                {
-                    _internalState.MouseClickToPerform = null;
-                    _internalState.MouseActionDelayMs = 0;
-                    _internalState.MouseMoveExecutedTime = null;
-                    
-                    switch (mouseClick.Button)
-                    {
-                        case MouseButton.Left:
-                            Input.Click(MouseButtons.Left);
-                            break;
-                        case MouseButton.Right:
-                            Input.Click(MouseButtons.Right);
-                            break;
-                        case MouseButton.Middle:
-                            Input.Click(MouseButtons.Middle);
-                            break;
-                    }
-                    _sinceLastKeyPress.Restart();
-                }
-                // else: wait for delay to elapse
+                Input.LeftUp();
             }
             else
             {
-                // No delay - execute immediately
-                _internalState.MouseClickToPerform = null;
-                
-                switch (mouseClick.Button)
-                {
-                    case MouseButton.Left:
-                        Input.Click(MouseButtons.Left);
-                        break;
-                    case MouseButton.Right:
-                        Input.Click(MouseButtons.Right);
-                        break;
-                    case MouseButton.Middle:
-                        Input.Click(MouseButtons.Middle);
-                        break;
-                }
-                _sinceLastKeyPress.Restart();
+                InputHelper.SendInputUp(heldKey);
             }
         }
 
@@ -574,11 +515,12 @@ public sealed class ReAgent : BaseSettingsPlugin<ReAgentSettings>
 
         if (GameController.Player.TryGetComponent<Buffs>(out var buffComp))
         {
-            /*if (buffComp.HasBuff("grace_period"))
+            if (!Settings.PluginSettings.IgnoreGracePeriod &&
+                buffComp.HasBuff("grace_period"))
             {
                 state = "Grace period is active";
                 return false;
-            }*/
+            }
         }
         else
         {
